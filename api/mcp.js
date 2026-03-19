@@ -1,74 +1,57 @@
-const { Octokit } = require("@octokit/rest");
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { createMcpHandler } from "mcp-handler/nextjs";
+import { z } from "zod";
+import { Octokit } from "@octokit/rest";
 
+const handler = createMcpHandler(
+(server: McpServer) => {
 const octokit = new Octokit({ auth: process.env.GITHUB_PAT });
 
-const tools = [
+server.tool("git_read", "Read a file or list a directory",
 {
-name: "list_repos",
-description: "List all repositories for the authenticated user",
-inputSchema: { type: "object", properties: {}, required: [] }
+owner: z.string(),
+repo: z.string(),
+path: z.string(),
+branch: z.string().default("main"),
 },
-{
-name: "list_files",
-description: "List files in a repository directory",
-inputSchema: {
-type: "object",
-properties: {
-owner: { type: "string" },
-repo: { type: "string" },
-path: { type: "string" }
-},
-required: ["owner", "repo"]
+async ({ owner, repo, path, branch }) => {
+const { data } = await octokit.repos.getContent({ owner, repo, path, ref: branch });
+if (Array.isArray(data)) {
+return { content: [{ type: "text", text: data.map(f => `${f.type === "dir" ? "📁" : "📄"} ${f.name}`).join("\n") }] };
 }
-},
-{
-name: "get_file",
-description: "Get the content of a file in a repository",
-inputSchema: {
-type: "object",
-properties: {
-owner: { type: "string" },
-repo: { type: "string" },
-path: { type: "string" }
-},
-required: ["owner", "repo", "path"]
+if ("content" in data && data.content) {
+return { content: [{ type: "text", text: Buffer.from(data.content, "base64").toString("utf-8") }] };
 }
-},
-{
-name: "push_file",
-description: "Create or update a file in a repository and commit it",
-inputSchema: {
-type: "object",
-properties: {
-owner: { type: "string" },
-repo: { type: "string" },
-path: { type: "string" },
-content: { type: "string" },
-message: { type: "string" },
-branch: { type: "string" }
-},
-try {
-const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body;
-const { method, params, id } = body;
+return { content: [{ type: "text", text: JSON.stringify(data) }] };
+}
+);
 
-if (method === "initialize") {
-return res.json({ jsonrpc: "2.0", id, result: {
-protocolVersion: "2024-11-05",
-capabilities: { tools: {} },
-serverInfo: { name: "github-mcp", version: "1.0.0" }
-}});
+server.tool("git_push", "Create or update a file",
+{
+owner: z.string(),
+repo: z.string(),
+path: z.string(),
+content: z.string(),
+message: z.string(),
+branch: z.string().default("main"),
+},
+async ({ owner, repo, path, content, message, branch }) => {
+let sha: string | undefined;
+try {
+const { data } = await octokit.repos.getContent({ owner, repo, path, ref: branch });
+if (!Array.isArray(data) && "sha" in data) sha = data.sha;
+} catch {}
+const { data } = await octokit.repos.createOrUpdateFileContents({
+owner, repo, path, branch, message,
+content: Buffer.from(content).toString("base64"),
+sha,
+committer: { name: "thehydrowave", email: "thehydrowave@users.noreply.github.com" },
+});
+return { content: [{ type: "text", text: `Committed: ${data.commit.sha?.slice(0, 7)}` }] };
 }
-if (method === "tools/list") {
-return res.json({ jsonrpc: "2.0", id, result: { tools } });
-}
-if (method === "tools/call") {
-const result = await callTool(params.name, params.arguments || {});
-return res.json({ jsonrpc: "2.0", id, result: {
-content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
-}});
-}
-return res.json({ jsonrpc: "2.0", id, result: {} });
-} catch (e) {
-return res.status(500).json({ error: e.message });
-}
-};
+);
+},
+{ capabilities: { tools: {} } }
+);
+
+export { handler as GET, handler as POST, handler as DELETE };
