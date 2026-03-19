@@ -1,20 +1,22 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { createMcpHandler } from "mcp-handler/next";
+import { createMcpHandler } from "mcp-handler";
 import { z } from "zod";
 import { Octokit } from "@octokit/rest";
 
 const handler = createMcpHandler(
-  (server: McpServer) => {
+  (server) => {
     const octokit = new Octokit({ auth: process.env.GITHUB_PAT });
 
-    server.tool(
+    server.registerTool(
       "git_read",
-      "Read a file or list a directory from a GitHub repo",
       {
-        owner: z.string().describe("Repository owner"),
-        repo: z.string().describe("Repository name"),
-        path: z.string().describe("File or directory path"),
-        branch: z.string().default("main").describe("Branch name"),
+        title: "Read File",
+        description: "Read a file or list a directory from a GitHub repo",
+        inputSchema: {
+          owner: z.string().describe("Repository owner"),
+          repo: z.string().describe("Repository name"),
+          path: z.string().describe("File or directory path"),
+          branch: z.string().default("main").describe("Branch name"),
+        },
       },
       async ({ owner, repo, path, branch }) => {
         const { data } = await octokit.repos.getContent({
@@ -25,34 +27,37 @@ const handler = createMcpHandler(
         });
         if (Array.isArray(data)) {
           const listing = data
-            .map((f) => `${f.type === "dir" ? "\u{1F4C1}" : "\u{1F4C4}"} ${f.name}`)
+            .map((f: any) => `${f.type === "dir" ? "[dir]" : "[file]"} ${f.name}`)
             .join("\n");
-          return { content: [{ type: "text", text: listing }] };
+          return { content: [{ type: "text" as const, text: listing }] };
         }
         if ("content" in data && data.content) {
           return {
             content: [
               {
-                type: "text",
+                type: "text" as const,
                 text: Buffer.from(data.content, "base64").toString("utf-8"),
               },
             ],
           };
         }
-        return { content: [{ type: "text", text: JSON.stringify(data) }] };
+        return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
       }
     );
 
-    server.tool(
+    server.registerTool(
       "git_push",
-      "Create or update a file in a GitHub repo",
       {
-        owner: z.string().describe("Repository owner"),
-        repo: z.string().describe("Repository name"),
-        path: z.string().describe("File path to create or update"),
-        content: z.string().describe("File content"),
-        message: z.string().describe("Commit message"),
-        branch: z.string().default("main").describe("Branch name"),
+        title: "Push File",
+        description: "Create or update a file in a GitHub repo",
+        inputSchema: {
+          owner: z.string().describe("Repository owner"),
+          repo: z.string().describe("Repository name"),
+          path: z.string().describe("File path to create or update"),
+          content: z.string().describe("File content"),
+          message: z.string().describe("Commit message"),
+          branch: z.string().default("main").describe("Branch name"),
+        },
       },
       async ({ owner, repo, path, content, message, branch }) => {
         let sha: string | undefined;
@@ -83,7 +88,7 @@ const handler = createMcpHandler(
         return {
           content: [
             {
-              type: "text",
+              type: "text" as const,
               text: `Committed: ${data.commit.sha?.slice(0, 7)} - ${message}`,
             },
           ],
@@ -91,15 +96,18 @@ const handler = createMcpHandler(
       }
     );
 
-    server.tool(
+    server.registerTool(
       "git_delete",
-      "Delete a file from a GitHub repo",
       {
-        owner: z.string().describe("Repository owner"),
-        repo: z.string().describe("Repository name"),
-        path: z.string().describe("File path to delete"),
-        message: z.string().describe("Commit message"),
-        branch: z.string().default("main").describe("Branch name"),
+        title: "Delete File",
+        description: "Delete a file from a GitHub repo",
+        inputSchema: {
+          owner: z.string().describe("Repository owner"),
+          repo: z.string().describe("Repository name"),
+          path: z.string().describe("File path to delete"),
+          message: z.string().describe("Commit message"),
+          branch: z.string().default("main").describe("Branch name"),
+        },
       },
       async ({ owner, repo, path, message, branch }) => {
         const { data: fileData } = await octokit.repos.getContent({
@@ -110,7 +118,7 @@ const handler = createMcpHandler(
         });
         if (Array.isArray(fileData)) {
           return {
-            content: [{ type: "text", text: "Cannot delete a directory" }],
+            content: [{ type: "text" as const, text: "Cannot delete a directory" }],
           };
         }
         await octokit.repos.deleteFile({
@@ -126,16 +134,19 @@ const handler = createMcpHandler(
           },
         });
         return {
-          content: [{ type: "text", text: `Deleted: ${path}` }],
+          content: [{ type: "text" as const, text: `Deleted: ${path}` }],
         };
       }
     );
 
-    server.tool(
+    server.registerTool(
       "git_list_repos",
-      "List repositories for a user or organization",
       {
-        owner: z.string().describe("GitHub username or org"),
+        title: "List Repos",
+        description: "List repositories for a user or organization",
+        inputSchema: {
+          owner: z.string().describe("GitHub username or org"),
+        },
       },
       async ({ owner }) => {
         const { data } = await octokit.repos.listForUser({
@@ -144,15 +155,18 @@ const handler = createMcpHandler(
           per_page: 30,
         });
         const list = data
-          .map((r) => `${r.full_name} ${r.private ? "private" : "public"} stars:${r.stargazers_count}`)
+          .map((r: any) => `${r.full_name} ${r.private ? "(private)" : "(public)"} stars:${r.stargazers_count}`)
           .join("\n");
-        return { content: [{ type: "text", text: list }] };
+        return { content: [{ type: "text" as const, text: list }] };
       }
     );
   },
+  {},
   {
-    capabilities: { tools: {} },
+    basePath: "/api",
+    maxDuration: 60,
+    verboseLogs: true,
   }
 );
 
-export { handler as GET, handler as POST, handler as DELETE };
+export { handler as GET, handler as POST };
